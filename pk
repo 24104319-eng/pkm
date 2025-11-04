@@ -1,0 +1,167 @@
+import tkinter as tk
+from tkinter import messagebox
+import csv
+import os
+import hashlib
+import binascii
+
+CSV_FILE = "users.csv"
+
+PBKDF2_ITERATIONS = 100_000
+SALT_SIZE = 16
+
+# -------------------- Hỗ trợ mật khẩu --------------------
+def generate_salt():
+    return os.urandom(SALT_SIZE)
+
+def hash_password_pbkdf2(password: str, salt: bytes) -> str:
+    dk = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, PBKDF2_ITERATIONS)
+    return binascii.hexlify(dk).decode('utf-8')
+
+def verify_password(password: str, salt_hex: str, hash_hex: str) -> bool:
+    salt = binascii.unhexlify(salt_hex)
+    expected = hash_password_pbkdf2(password, salt)
+    return expected == hash_hex
+
+# -------------------- File CSV --------------------
+def ensure_csv_exists():
+    if not os.path.exists(CSV_FILE):
+        with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                'username','password_hash','salt','role','full_name','phone','address','email'
+            ])
+            writer.writeheader()
+
+# -------------------- Đăng ký --------------------
+def register_user(username, password, full_name, phone, address, email):
+    role = "vehicle"
+    ensure_csv_exists()
+    with open(CSV_FILE, mode='r', newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row['username'] == username:
+                return False, "Tên đăng nhập đã tồn tại"
+
+    salt = generate_salt()
+    salt_hex = binascii.hexlify(salt).decode('utf-8')
+    pwd_hash = hash_password_pbkdf2(password, salt)
+
+    with open(CSV_FILE, mode='a', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=[
+            'username','password_hash','salt','role','full_name','phone','address','email'
+        ])
+        writer.writerow({
+            'username': username,
+            'password_hash': pwd_hash,
+            'salt': salt_hex,
+            'role': role,
+            'full_name': full_name,
+            'phone': phone,
+            'address': address,
+            'email': email
+        })
+
+    return True, "Đăng ký thành công"
+
+# -------------------- Đăng nhập --------------------
+def login_user(username, password):
+    """Trả về (True, dict_thông_tin_user) nếu đúng, ngược lại (False, msg)"""
+    if not os.path.exists(CSV_FILE):
+        return False, "Chưa có tài khoản nào trong hệ thống"
+
+    with open(CSV_FILE, mode='r', newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row['username'] == username:
+                if verify_password(password, row['salt'], row['password_hash']):
+                    # Trả về toàn bộ thông tin user
+                    return True, {
+                        "username": row['username'],
+                        "role": row['role'],
+                        "full_name": row['full_name'],
+                        "phone": row['phone'],
+                        "address": row['address'],
+                        "email": row['email']
+                    }
+                else:
+                    return False, "Tên đăng nhập hoặc mật khẩu không đúng"
+    return False, "Tên đăng nhập hoặc mật khẩu không đúng"
+
+# -------------------- Giao diện Tkinter --------------------
+def open_register_window():
+    reg_win = tk.Toplevel()
+    reg_win.title("Đăng ký tài khoản (Vehicle)")
+    reg_win.geometry("400x420")
+
+    fields = ["Tên đăng nhập", "Mật khẩu", "Họ và tên", "Số điện thoại", "Địa chỉ", "Email"]
+    entries = {}
+
+    for field in fields:
+        tk.Label(reg_win, text=field+":").pack(pady=5)
+        entry = tk.Entry(reg_win)
+        if field == "Mật khẩu":
+            entry.config(show="*")
+        entry.pack()
+        entries[field] = entry
+
+    def submit_register():
+        username = entries["Tên đăng nhập"].get().strip()
+        password = entries["Mật khẩu"].get().strip()
+        full_name = entries["Họ và tên"].get().strip()
+        phone = entries["Số điện thoại"].get().strip()
+        address = entries["Địa chỉ"].get().strip()
+        email = entries["Email"].get().strip()
+
+        if not all([username, password, full_name, phone, address, email]):
+            messagebox.showerror("Lỗi", "Vui lòng điền đủ thông tin")
+            return
+
+        success, msg = register_user(username, password, full_name, phone, address, email)
+        if success:
+            messagebox.showinfo("Thành công", msg)
+            reg_win.destroy()
+        else:
+            messagebox.showerror("Lỗi", msg)
+
+    tk.Button(reg_win, text="Đăng ký", command=submit_register).pack(pady=10)
+
+def open_login_window():
+    root = tk.Tk()
+    root.title("Đăng nhập")
+    root.geometry("320x230")
+
+    tk.Label(root, text="Tên đăng nhập:").pack(pady=5)
+    entry_username = tk.Entry(root)
+    entry_username.pack()
+
+    tk.Label(root, text="Mật khẩu:").pack(pady=5)
+    entry_password = tk.Entry(root, show="*")
+    entry_password.pack()
+
+    def submit_login():
+        username = entry_username.get().strip()
+        password = entry_password.get().strip()
+
+        success, result = login_user(username, password)
+        if success:
+            user = result
+            messagebox.showinfo(
+                "Đăng nhập thành công",
+                f"Chào {user['full_name']}!\n"
+                f"Vai trò: {user['role']}\n"
+                f"Số điện thoại: {user['phone']}"
+            )
+        else:
+            messagebox.showerror("Lỗi", result)
+
+    tk.Button(root, text="Đăng nhập", command=submit_login).pack(pady=10)
+    tk.Button(root, text="Đăng ký tài khoản Vehicle", command=open_register_window).pack(pady=5)
+
+    root.mainloop()
+
+# -------------------- Chạy --------------------
+if __name__ == "__main__":
+    # Thêm user thủ công (chỉ khi chạy lần đầu)
+    ensure_csv_exists()
+    open_login_window()
+
